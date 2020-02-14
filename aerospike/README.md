@@ -41,6 +41,9 @@ The following connection parameters are available.
   * `as.password` - The password for the user (no default)
   * `as.timeout` - The transaction and connection timeout (in ms, default: `10000`)
   * `as.namespace` - The namespace to be used for the benchmark (default: `ycsb`)
+  * `as.readSetName` - The set to be used for the read benchmark
+  * `as.readKeysFromSource` - Enable reading keys from source set for the benchmark
+  * `as.readKeysCount` - Total keys to read from source set for read benchmark (default: `10000`)
 
 Add them to the workload or set them with the shell command, as in:
 
