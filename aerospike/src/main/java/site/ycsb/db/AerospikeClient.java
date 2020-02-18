@@ -66,35 +66,39 @@ public class AerospikeClient extends site.ycsb.DB {
   private WritePolicy updatePolicy = new WritePolicy();
   private WritePolicy deletePolicy = new WritePolicy();
 
-  private List<String> readKeys;
+  private List<Key> readKeys;
 
   private int totalReadKeys = 0;
 
   private boolean readKeysFromSource;
 
   @Override
-  public void init() throws DBException {
-    insertPolicy.recordExistsAction = RecordExistsAction.CREATE_ONLY;
-    updatePolicy.recordExistsAction = RecordExistsAction.REPLACE_ONLY;
+  public synchronized void init() throws DBException {
+    this.insertPolicy.recordExistsAction = RecordExistsAction.CREATE_ONLY;
+    this.updatePolicy.recordExistsAction = RecordExistsAction.REPLACE_ONLY;
 
     Properties props = getProperties();
 
-    namespace = props.getProperty("as.namespace", DEFAULT_NAMESPACE);
+    this.namespace = props.getProperty("as.namespace", DEFAULT_NAMESPACE);
 
-    readSetName = props.getProperty("as.readSetName");
+    this.readSetName = props.getProperty("as.readSetName");
 
     String host = props.getProperty("as.host", DEFAULT_HOST);
     String user = props.getProperty("as.user");
     String password = props.getProperty("as.password");
     int port = Integer.parseInt(props.getProperty("as.port", DEFAULT_PORT));
     int timeout = Integer.parseInt(props.getProperty("as.timeout", DEFAULT_TIMEOUT));
-    readKeysFromSource = Boolean.parseBoolean(props.getProperty("as.readKeysFromSource", "false"));
+    this.readKeysFromSource = Boolean.parseBoolean(props.getProperty("as.readKeysFromSource", "false"));
     int totalKeys = Integer.parseInt(props.getProperty("as.readKeysCount", "0"));
 
     readPolicy.setTimeout(timeout);
     insertPolicy.setTimeout(timeout);
     updatePolicy.setTimeout(timeout);
     deletePolicy.setTimeout(timeout);
+
+    readPolicy.readModeAP = ReadModeAP.ONE;
+    readPolicy.readModeSC = ReadModeSC.ALLOW_REPLICA;
+    readPolicy.maxRetries = Integer.parseInt(props.getProperty("as.maxRetries", "3"));
 
     ClientPolicy clientPolicy = new ClientPolicy();
 
@@ -107,7 +111,7 @@ public class AerospikeClient extends site.ycsb.DB {
       String[] hosts = host.split(",");
       client = new com.aerospike.client.AerospikeClient(clientPolicy, Arrays.stream(hosts)
           .map(h -> new Host(h, port)).toArray(Host[]::new));
-      if(readKeysFromSource) {
+      if(readKeysFromSource && readKeys == null) {
         readKeys = new ArrayList<>();
         Statement statement = new Statement();
         statement.setNamespace(namespace);
@@ -121,11 +125,12 @@ public class AerospikeClient extends site.ycsb.DB {
         queryPolicy.priority = Priority.LOW;
         queryPolicy.maxRetries = 3;
         queryPolicy.sleepBetweenRetries = 1000;
-        RecordSet result = client.query(null, statement);
+        RecordSet result = client.query(queryPolicy, statement);
         try {
           int i = 0;
           while (result.next()) {
-            readKeys.add(result.getKey().userKey.toString());
+            Key key = result.getKey();
+            readKeys.add(key);
             i = i+ 1;
             if(i > totalKeys) {
               break;
@@ -136,7 +141,7 @@ public class AerospikeClient extends site.ycsb.DB {
           result.close();
         }
       }
-
+      System.err.println("Total keys read: " +totalReadKeys);
     } catch (AerospikeException e) {
       throw new DBException(String.format("Error while creating Aerospike " +
           "client for %s:%d.", host, port), e);
@@ -151,24 +156,29 @@ public class AerospikeClient extends site.ycsb.DB {
   @Override
   public Status read(String table, String key, Set<String> fields,
       Map<String, ByteIterator> result) {
-    String newKey = readKeysFromSource ? getRandomKey() : key;
+    Key newKey;
+    if(readKeysFromSource) {
+      newKey = getRandomKey();
+    } else {
+      newKey = new Key(namespace, readSetName, key);
+    }
     try {
       Record record;
       if (fields != null) {
-        record = client.get(readPolicy, new Key(namespace, table, newKey),
+        record = client.get(readPolicy, newKey,
             fields.toArray(new String[fields.size()]));
       } else {
-        record = client.get(readPolicy, new Key(namespace, table, newKey));
+        record = client.get(readPolicy, newKey);
       }
-
       if (record == null) {
-        System.err.println("Record key " + key + " not found (read)");
+        System.err.println("Record key " + newKey + " not found (read)");
         return Status.ERROR;
       }
 
       for (Map.Entry<String, Object> entry: record.bins.entrySet()) {
-        result.put(entry.getKey(),
-            new ByteArrayByteIterator((byte[])entry.getValue()));
+        if(entry.getValue() instanceof String) {
+          result.put(entry.getKey(), new ByteArrayByteIterator(((String)entry.getValue()).getBytes()));
+        }
       }
 
       return Status.OK;
@@ -178,7 +188,7 @@ public class AerospikeClient extends site.ycsb.DB {
     }
   }
 
-  public String getRandomKey() {
+  public Key getRandomKey() {
     int randomElementIndex
         = ThreadLocalRandom.current().nextInt(totalReadKeys) % readKeys.size();
     return readKeys.get(randomElementIndex);

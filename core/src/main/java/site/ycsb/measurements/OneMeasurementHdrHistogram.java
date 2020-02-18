@@ -115,6 +115,7 @@ public class OneMeasurementHdrHistogram extends OneMeasurement {
     }
     exporter.write(getName(), "Operations", totalHistogram.getTotalCount());
     exporter.write(getName(), "AverageLatency(us)", totalHistogram.getMean());
+    exporter.write(getName(), "Median(us)", totalHistogram.getValueAtPercentile(50.0));
     exporter.write(getName(), "MinLatency(us)", totalHistogram.getMinValue());
     exporter.write(getName(), "MaxLatency(us)", totalHistogram.getMaxValue());
 
